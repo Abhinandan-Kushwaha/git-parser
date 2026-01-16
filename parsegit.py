@@ -1,92 +1,50 @@
 import aiohttp
-import asyncio
 import json
+from fastapi import FastAPI, Query
 
-async def crawlPage(session, baseUrl, relPath, branch):
+app = FastAPI()
+
+async def crawlPage(session, baseUrl, relPath, branch, results):
     path = baseUrl + relPath
 
     async with session.get(path) as response:
         content = await response.text()
 
     branchIndex = content.find("\"defaultBranch\":")
-
     if branchIndex == -1:
         return
-    if branch == '':
-        substring = content[branchIndex + 17 : branchIndex + 57] # considering max length of branch name to be 40
-        nextCommaIndex = substring.find(",") # this(nextCommaIndex) is actually the length of the branch name
-        if nextCommaIndex == -1:
-            return
-        branch = content[branchIndex + 17 : branchIndex + 17 + nextCommaIndex - 1]
+
+    if branch == "":
+        substring = content[branchIndex + 17: branchIndex + 57]
+        comma = substring.find(",")
+        branch = substring[:comma - 1]
 
     index = content.find("\"tree\":{\"items\":")
     if index == -1:
         return
 
     filesStr = content[index + len("\"tree\":{\"items\":"):]
-    indexOfEnd = filesStr.find("]")
-    filesArrayStr = filesStr[:indexOfEnd + 1]
+    filesArrayStr = filesStr[:filesStr.find("]") + 1]
+    files = json.loads(filesArrayStr)
 
-    filesArray = json.loads(filesArrayStr)
+    for item in files:
+        name = item["name"]
+        t = item["contentType"]
 
-    for item in filesArray:
-        name = item.get("name")
-        contentType = item.get("contentType")
-        if contentType:
-            if contentType == "directory":
-                if relPath == "":
-                    newRelPath = f"/tree/{branch}/" + name
-                else:
-                    newRelPath = relPath + "/" + name
+        if t == "directory":
+            newRel = f"/tree/{branch}/{name}" if not relPath else f"{relPath}/{name}"
+            await crawlPage(session, baseUrl, newRel, branch, results)
 
-                await crawlPage(session, baseUrl, newRelPath, branch)
-            else:
-                path = baseUrl +f"/blob/{branch}"+ relPath + "/" + name
-                if len(relPath)>0:
-                    print(relPath + "/" + name)
-                else:
-                    print(name)
-                async with session.get(path) as response:
-                    content = await response.text()
-                if path.endswith(".py"):
-                    delimiter = "data-target=\"react-app.embeddedData\">"
-                    startIndex = content.find(delimiter) + len(delimiter)
-                    codeStr = content[startIndex:-1]
-                    endIndex = codeStr.find("</script>")
-                    codeStr = codeStr[0:endIndex]
-                    codeObj = json.loads(codeStr)
-                    payload = codeObj.get("payload")
-                    if payload:
-                        blob = payload.get("blob")
-                        if blob:
-                            code = blob.get("rawLines")
-                            print("_______________________________")
-                            print(f"Methods and classes in {name}-")
-                            for line in code:
-                                x = line.strip()
-                                if x.startswith("def "):
-                                    x=line.find("(")
-                                    # There is a corner case, if there is multiline string and If a line starts with def then it will also count.
-                                    y=line[4:x]
-                                    z=y.strip()
-                                    print("method: ",z)
-                                elif x.startswith("Class"):
-                                    x=line.find("(")
-                                    y=line[5:x]
-                                    z=y.strip()
-                                    print("class: ",z)
-                            print("_______________________________")
-                            print("")
-                            print("")
-            
+        elif t == "file" and name.endswith(".py"):
+            results.append(relPath + "/" + name if relPath else name)
 
-
-async def main():
-    baseUrl = input("Enter Git url: ").strip()
-    if(baseUrl.endswith("/")):
-        baseUrl = baseUrl[0:-1]
-    branch = ''
+@app.get("/analyze")
+async def analyze(repo_url: str = Query(...)):
+    results = []
     async with aiohttp.ClientSession() as session:
-        await crawlPage(session, baseUrl, "", branch)
+        await crawlPage(session, repo_url.rstrip("/"), "", "", results)
 
-asyncio.run(main())
+    return {
+        "repo": repo_url,
+        "python_files": results
+    }
