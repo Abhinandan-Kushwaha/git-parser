@@ -5,7 +5,7 @@ async function run() {
     out.textContent = "Processing...";
   
     const res = await fetch(
-      "https://your-backend.onrender.com/analyze?repo_url=" +
+      "https://git-parser.onrender.com/analyze?repo_url=https://github.com/Abhinandan-Kushwaha/git-parser" +
       encodeURIComponent(repo)
     );
   
